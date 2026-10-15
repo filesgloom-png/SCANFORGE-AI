@@ -54,6 +54,23 @@ class DocumentImageProcessorTest {
     }
 
     @Test
+    fun selectBestQuadrilateralRejectsNarrowInternalTableInsteadOfCroppingIt() {
+        val narrowTable = arrayOf(
+            Point(100.0, 0.0),
+            Point(150.0, 0.0),
+            Point(150.0, 400.0),
+            Point(100.0, 400.0)
+        )
+
+        assertNull(
+            DocumentImageProcessor.selectBestQuadrilateral(
+                listOf(narrowTable),
+                100_000.0
+            )
+        )
+    }
+
+    @Test
     fun selectBestQuadrilateralChoosesLargestValidDocumentAndOrdersItsCorners() {
         val smaller = rectangle(10.0, 10.0, 150.0, 150.0)
         val larger = arrayOf(
