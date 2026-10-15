@@ -125,6 +125,64 @@ object DocumentImageProcessor {
         }
     }
 
+    /**
+     * Detects the page in a camera frame without creating a corrected bitmap.
+     * Coordinates are normalized to the supplied bitmap; null means the frame
+     * does not contain a sufficiently large, page-like external contour.
+     */
+    fun detectDocumentCorners(source: Bitmap): DocumentDetection? {
+        if (source.width < 32 || source.height < 32 || !OpenCVLoader.initLocal()) return null
+
+        val rgba = Mat()
+        val gray = Mat()
+        val blurred = Mat()
+        val edges = Mat()
+        val hierarchy = Mat()
+        val contours = mutableListOf<MatOfPoint>()
+        val candidates = mutableListOf<Array<Point>>()
+        return try {
+            Utils.bitmapToMat(source, rgba)
+            Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY)
+            Imgproc.GaussianBlur(gray, blurred, Size(5.0, 5.0), 0.0)
+            Imgproc.Canny(blurred, edges, 55.0, 165.0)
+            val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(3.0, 3.0))
+            try {
+                Imgproc.dilate(edges, edges, kernel)
+            } finally {
+                kernel.release()
+            }
+            Imgproc.findContours(edges, contours, hierarchy, Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
+            contours.forEach { contour ->
+                val curve = MatOfPoint2f(*contour.toArray())
+                val approximation = MatOfPoint2f()
+                try {
+                    Imgproc.approxPolyDP(curve, approximation, Imgproc.arcLength(curve, true) * 0.02, true)
+                    val points = approximation.toArray()
+                    if (points.size == 4) candidates.add(points)
+                } finally {
+                    curve.release()
+                    approximation.release()
+                }
+            }
+            val ordered = selectBestQuadrilateral(candidates, source.width.toDouble() * source.height)
+                ?: return null
+            val areaRatio = polygonArea(ordered.toTypedArray()) / (source.width.toDouble() * source.height)
+            if (areaRatio < 0.12 || areaRatio > 0.98) return null
+            val normalized = ordered.map { Point(it.x / source.width, it.y / source.height) }
+            val confidence = (0.65 + (areaRatio.coerceIn(0.12, 0.85) - 0.12) * 0.25).coerceIn(0.0, 0.95)
+            DocumentDetection(normalized, confidence)
+        } catch (_: Exception) {
+            null
+        } finally {
+            contours.forEach { it.release() }
+            rgba.release()
+            gray.release()
+            blurred.release()
+            edges.release()
+            hierarchy.release()
+        }
+    }
+
     internal fun selectBestQuadrilateral(
         candidates: List<Array<Point>>,
         imageArea: Double
