@@ -35,7 +35,15 @@ object DocumentImageProcessor {
             Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY)
             Imgproc.GaussianBlur(gray, blurred, Size(5.0, 5.0), 0.0)
             Imgproc.Canny(blurred, edges, 55.0, 165.0)
-            Imgproc.dilate(edges, edges, Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(3.0, 3.0)))
+            val dilationKernel = Imgproc.getStructuringElement(
+                Imgproc.MORPH_RECT,
+                Size(3.0, 3.0)
+            )
+            try {
+                Imgproc.dilate(edges, edges, dilationKernel)
+            } finally {
+                dilationKernel.release()
+            }
 
             Imgproc.findContours(
                 edges,
@@ -47,15 +55,18 @@ object DocumentImageProcessor {
 
             contours.forEach { contour ->
                 val curve = MatOfPoint2f(*contour.toArray())
-                val perimeter = Imgproc.arcLength(curve, true)
                 val approximation = MatOfPoint2f()
-                Imgproc.approxPolyDP(curve, approximation, perimeter * 0.02, true)
-                val points = approximation.toArray()
-                if (points.size == 4) {
-                    quadrilaterals.add(points)
+                try {
+                    val perimeter = Imgproc.arcLength(curve, true)
+                    Imgproc.approxPolyDP(curve, approximation, perimeter * 0.02, true)
+                    val points = approximation.toArray()
+                    if (points.size == 4) {
+                        quadrilaterals.add(points)
+                    }
+                } finally {
+                    curve.release()
+                    approximation.release()
                 }
-                curve.release()
-                approximation.release()
             }
 
             val corners = selectBestQuadrilateral(
@@ -73,26 +84,36 @@ object DocumentImageProcessor {
                 Point((width - 1).toDouble(), (height - 1).toDouble()),
                 Point(0.0, (height - 1).toDouble())
             )
-            val transform = Imgproc.getPerspectiveTransform(sourcePoints, destinationPoints)
             val corrected = Mat()
             try {
-                Imgproc.warpPerspective(
-                    rgba,
-                    corrected,
-                    transform,
-                    Size(width.toDouble(), height.toDouble()),
-                    Imgproc.INTER_CUBIC,
-                    Core.BORDER_REPLICATE
-                )
-                val output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-                Utils.matToBitmap(corrected, output)
-                return output
+                val transform = Imgproc.getPerspectiveTransform(sourcePoints, destinationPoints)
+                try {
+                    Imgproc.warpPerspective(
+                        rgba,
+                        corrected,
+                        transform,
+                        Size(width.toDouble(), height.toDouble()),
+                        Imgproc.INTER_CUBIC,
+                        Core.BORDER_REPLICATE
+                    )
+                    val output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                    try {
+                        Utils.matToBitmap(corrected, output)
+                        return output
+                    } catch (error: Exception) {
+                        output.recycle()
+                        throw error
+                    }
+                } finally {
+                    transform.release()
+                }
             } finally {
                 sourcePoints.release()
                 destinationPoints.release()
-                transform.release()
                 corrected.release()
             }
+        } catch (_: Exception) {
+            null
         } finally {
             contours.forEach { it.release() }
             rgba.release()
