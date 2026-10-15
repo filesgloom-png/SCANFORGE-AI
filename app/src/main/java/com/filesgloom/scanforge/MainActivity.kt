@@ -15,6 +15,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
 import androidx.camera.core.ImageCapture.OutputFileOptions
@@ -41,6 +42,9 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.TextSnippet
 import androidx.compose.material3.Button
@@ -130,6 +134,20 @@ class MainActivity : ComponentActivity() {
                 } else {
                     ScannerHome(
                         selectedCount = selectedUris.size,
+                        pageUris = selectedUris.toList(),
+                        onMovePage = { from, to ->
+                            if (from in selectedUris.indices && to in selectedUris.indices && from != to) {
+                                val item = selectedUris.removeAt(from)
+                                selectedUris.add(to, item)
+                            }
+                        },
+                        onRemovePage = { index ->
+                            if (index in selectedUris.indices) {
+                                val removed = selectedUris.removeAt(index)
+                                recognizedText.removeAll { it.first == removed.toString() }
+                                status = "Страница удалена • осталось: ${selectedUris.size}"
+                            }
+                        },
                         recognizedCount = recognizedText.size,
                         recognizedText = recognizedText.toList(),
                         status = status,
@@ -445,6 +463,9 @@ private fun CameraCaptureScreen(
 @Composable
 private fun ScannerHome(
     selectedCount: Int,
+    pageUris: List<Uri>,
+    onMovePage: (Int, Int) -> Unit,
+    onRemovePage: (Int) -> Unit,
     recognizedCount: Int,
     recognizedText: List<Pair<String, String>>,
     status: String,
@@ -553,6 +574,33 @@ private fun ScannerHome(
                 )
             }
 
+            if (pageUris.isNotEmpty()) {
+                Text("СТРАНИЦЫ PDF • ПОРЯДОК ЭКСПОРТА", color = Gold, fontWeight = FontWeight.Bold, fontSize = 11.sp, letterSpacing = 1.2.sp)
+                Column(
+                    modifier = Modifier.fillMaxWidth().weight(0.45f, fill = false),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    pageUris.forEachIndexed { index, uri ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(12.dp)).padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(String.format("%02d", index + 1), color = Emerald, fontWeight = FontWeight.Bold, modifier = Modifier.width(28.dp))
+                            Text(uri.lastPathSegment?.substringAfterLast('/') ?: "Скан ${index + 1}", color = Paper, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                            IconButton(onClick = { onMovePage(index, index - 1) }, enabled = index > 0) {
+                                Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Выше", tint = if (index > 0) Gold else Muted)
+                            }
+                            IconButton(onClick = { onMovePage(index, index + 1) }, enabled = index < pageUris.lastIndex) {
+                                Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Ниже", tint = if (index < pageUris.lastIndex) Gold else Muted)
+                            }
+                            IconButton(onClick = { onRemovePage(index) }) {
+                                Icon(Icons.Default.Delete, contentDescription = "Удалить страницу", tint = Color(0xFFFF7B72))
+                            }
+                        }
+                    }
+                }
+            }
             Text("НАЙДЕННЫЕ ДОКУМЕНТЫ", color = Gold, fontWeight = FontWeight.Bold, fontSize = 11.sp, letterSpacing = 1.4.sp)
             if (recognizedText.isEmpty()) {
                 Card(
