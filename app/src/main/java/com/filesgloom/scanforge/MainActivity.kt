@@ -561,7 +561,14 @@ internal fun transformDisplayCorners(
             else -> x to y
         }
     }
-    return orderDisplayCorners(rotated)
+    // Input corners are already TL, TR, BR, BL. Preserve corner identity while
+    // rotating instead of re-sorting by x+y, which is ambiguous for rectangles.
+    return when (rotationDegrees) {
+        90 -> listOf(rotated[3], rotated[0], rotated[1], rotated[2])
+        180 -> listOf(rotated[2], rotated[3], rotated[0], rotated[1])
+        270 -> listOf(rotated[1], rotated[2], rotated[3], rotated[0])
+        else -> rotated
+    }
 }
 
 internal fun orderDisplayCorners(points: List<Pair<Float, Float>>): List<Pair<Float, Float>> {
