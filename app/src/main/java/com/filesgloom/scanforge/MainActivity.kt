@@ -224,19 +224,20 @@ class MainActivity : ComponentActivity() {
                             photo
                         } else {
                             val output = File(photo.parentFile, "corrected_${photo.nameWithoutExtension}.jpg")
-                            try {
+                            val saved = try {
                                 FileOutputStream(output).use { stream ->
                                     if (!corrected.compress(Bitmap.CompressFormat.JPEG, 94, stream)) {
                                         throw java.io.IOException("Не удалось сохранить исправленный снимок")
                                     }
                                 }
-                                output
-                            } catch (error: Exception) {
+                                true
+                            } catch (_: Exception) {
                                 output.delete()
-                                photo
+                                false
                             } finally {
                                 corrected.recycle()
                             }
+                            selectPhotoAfterCorrection(photo, output, saved)
                         }
                     } finally {
                         source.recycle()
@@ -408,7 +409,16 @@ private fun CameraCaptureScreen(
                             val rotation = image.imageInfo.rotationDegrees
                             val displayCorners = detection?.corners
                                 ?.map { it.x.toFloat() to it.y.toFloat() }
-                                ?.let { transformDisplayCorners(it, rotation) }
+                                ?.let {
+                                    mapCornersToPreview(
+                                        it,
+                                        rotation,
+                                        frame.width,
+                                        frame.height,
+                                        previewView.width,
+                                        previewView.height
+                                    )
+                                }
 
                             ContextCompat.getMainExecutor(context).execute {
                                 liveCorners = displayCorners
@@ -491,9 +501,7 @@ private fun CameraCaptureScreen(
                         )
                         frame.forEach { (from, to) -> drawLine(Gold, from, to, strokeWidth = stroke) }
                     } else {
-                        val orientedWidth = previewView.width.toFloat().coerceAtLeast(1f)
-                        val orientedHeight = previewView.height.toFloat().coerceAtLeast(1f)
-                        val points = corners.map { (x, y) -> Offset(x * orientedWidth, y * orientedHeight) }
+                        val points = corners.map { (x, y) -> Offset(x * size.width, y * size.height) }
                         for (index in points.indices) {
                             drawLine(Emerald, points[index], points[(index + 1) % points.size], strokeWidth = stroke)
                             drawCircle(Emerald, radius = 5.dp.toPx(), center = points[index])
@@ -570,6 +578,44 @@ internal fun transformDisplayCorners(
         else -> rotated
     }
 }
+
+/**
+ * Maps normalized analysis-frame corners to the visible PreviewView area.
+ * PreviewView uses FILL_CENTER, so part of the rotated camera frame is cropped
+ * whenever its aspect ratio differs from the view's aspect ratio.
+ */
+internal fun mapCornersToPreview(
+    points: List<Pair<Float, Float>>,
+    rotationDegrees: Int,
+    imageWidth: Int,
+    imageHeight: Int,
+    previewWidth: Int,
+    previewHeight: Int
+): List<Pair<Float, Float>> {
+    if (points.size != 4 || imageWidth <= 0 || imageHeight <= 0 ||
+        previewWidth <= 0 || previewHeight <= 0
+    ) return emptyList()
+
+    val rotated = transformDisplayCorners(points, rotationDegrees)
+    val orientedWidth = if (rotationDegrees == 90 || rotationDegrees == 270) imageHeight else imageWidth
+    val orientedHeight = if (rotationDegrees == 90 || rotationDegrees == 270) imageWidth else imageHeight
+    val sourceAspect = orientedWidth.toFloat() / orientedHeight.toFloat()
+    val previewAspect = previewWidth.toFloat() / previewHeight.toFloat()
+
+    return if (sourceAspect > previewAspect) {
+        val visibleFraction = (previewAspect / sourceAspect).coerceIn(0f, 1f)
+        val cropStart = (1f - visibleFraction) / 2f
+        rotated.map { (x, y) -> ((x - cropStart) / visibleFraction) to y }
+    } else {
+        val visibleFraction = (sourceAspect / previewAspect).coerceIn(0f, 1f)
+        val cropStart = (1f - visibleFraction) / 2f
+        rotated.map { (x, y) -> x to ((y - cropStart) / visibleFraction) }
+    }
+}
+
+/** Keep the untouched camera photo unless a corrected output was fully written. */
+internal fun selectPhotoAfterCorrection(original: java.io.File, corrected: java.io.File, correctionSaved: Boolean): java.io.File =
+    if (correctionSaved) corrected else original
 
 internal fun orderDisplayCorners(points: List<Pair<Float, Float>>): List<Pair<Float, Float>> {
     if (points.size != 4) return emptyList()

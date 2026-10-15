@@ -156,6 +156,24 @@ class DocumentImageProcessorTest {
         assertPoint(selected[3], 40.0, 390.0)
     }
 
+    @Test
+    fun geometryConfidenceRewardsAWellShapedPage() {
+        val page = rectangle(20.0, 20.0, 380.0, 380.0)
+        val confidence = DocumentImageProcessor.scoreQuadrilateralConfidence(page, 400.0 * 400.0)
+        assertEquals(true, confidence >= 0.80)
+    }
+
+    @Test
+    fun geometryConfidenceRejectsLowAreaAndInvalidGeometry() {
+        val tiny = rectangle(10.0, 10.0, 100.0, 100.0)
+        val concave = arrayOf(
+            Point(10.0, 10.0), Point(390.0, 10.0),
+            Point(80.0, 80.0), Point(10.0, 390.0)
+        )
+        assertEquals(0.0, DocumentImageProcessor.scoreQuadrilateralConfidence(tiny, 400.0 * 400.0), 0.0001)
+        assertEquals(0.0, DocumentImageProcessor.scoreQuadrilateralConfidence(concave, 400.0 * 400.0), 0.0001)
+    }
+
     private fun rectangle(left: Double, top: Double, right: Double, bottom: Double) = arrayOf(
         Point(left, top),
         Point(right, top),

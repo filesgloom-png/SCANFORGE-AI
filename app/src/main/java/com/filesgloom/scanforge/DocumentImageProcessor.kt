@@ -172,10 +172,12 @@ object DocumentImageProcessor {
             }
             val ordered = selectBestQuadrilateral(candidates, source.width.toDouble() * source.height)
                 ?: return null
-            val areaRatio = polygonArea(ordered.toTypedArray()) / (source.width.toDouble() * source.height)
-            if (areaRatio < 0.12 || areaRatio > 0.98) return null
+            val confidence = scoreQuadrilateralConfidence(
+                ordered.toTypedArray(),
+                source.width.toDouble() * source.height
+            )
+            if (confidence < 0.01) return null
             val normalized = ordered.map { Point(it.x / source.width, it.y / source.height) }
-            val confidence = (0.65 + (areaRatio.coerceIn(0.12, 0.85) - 0.12) * 0.25).coerceIn(0.0, 0.95)
             DocumentDetection(normalized, confidence)
         } catch (_: Exception) {
             null
@@ -187,6 +189,40 @@ object DocumentImageProcessor {
             edges.release()
             hierarchy.release()
         }
+    }
+
+    /**
+     * Combines page coverage with corner-angle and opposite-edge consistency.
+     * Area alone is not enough: a large, badly skewed contour must not trigger
+     * automatic capture. Invalid geometry scores zero and is never auto-captured.
+     */
+    internal fun scoreQuadrilateralConfidence(points: Array<Point>, imageArea: Double): Double {
+        if (points.size != 4 || imageArea <= 0.0 || !isConvexQuadrilateral(points)) return 0.0
+        val areaRatio = polygonArea(points) / imageArea
+        if (areaRatio < 0.12 || areaRatio > 0.98 || !hasPlausibleDocumentAspect(points)) return 0.0
+
+        val areaScore = ((areaRatio - 0.12) / (0.85 - 0.12)).coerceIn(0.0, 1.0)
+        val angleScores = points.indices.map { index ->
+            val previous = points[(index + 3) % 4]
+            val current = points[index]
+            val next = points[(index + 1) % 4]
+            val ax = previous.x - current.x
+            val ay = previous.y - current.y
+            val bx = next.x - current.x
+            val by = next.y - current.y
+            val denominator = hypot(ax, ay) * hypot(bx, by)
+            if (denominator <= 1e-9) 0.0 else {
+                val cosine = ((ax * bx + ay * by) / denominator).coerceIn(-1.0, 1.0)
+                val angle = Math.toDegrees(kotlin.math.acos(cosine))
+                (1.0 - kotlin.math.abs(angle - 90.0) / 90.0).coerceIn(0.0, 1.0)
+            }
+        }
+        val angleScore = angleScores.average()
+        val edges = points.indices.map { distance(points[it], points[(it + 1) % 4]) }
+        val horizontalConsistency = minOf(edges[0], edges[2]) / maxOf(edges[0], edges[2]).coerceAtLeast(1e-9)
+        val verticalConsistency = minOf(edges[1], edges[3]) / maxOf(edges[1], edges[3]).coerceAtLeast(1e-9)
+        val edgeScore = (horizontalConsistency + verticalConsistency) / 2.0
+        return (0.15 + areaScore * 0.30 + angleScore * 0.35 + edgeScore * 0.20).coerceIn(0.0, 0.99)
     }
 
     internal fun selectBestQuadrilateral(

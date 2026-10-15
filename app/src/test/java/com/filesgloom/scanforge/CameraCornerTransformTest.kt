@@ -51,6 +51,34 @@ class CameraCornerTransformTest {
         assertTrue(orderDisplayCorners(emptyList()).isEmpty())
     }
 
+    @Test
+    fun fillCenterMappingCompensatesForHorizontalCrop() {
+        val points = listOf(
+            0.1f to 0.1f, 0.9f to 0.1f, 0.9f to 0.9f, 0.1f to 0.9f
+        )
+        val mapped = mapCornersToPreview(points, 0, 1920, 1080, 400, 800)
+        assertEquals(4, mapped.size)
+        assertTrue(mapped.first().first < 0f)
+        assertTrue(mapped[1].first > 1f)
+        assertCorners(mapped.map { it.second to it.first }, listOf(
+            0.1f to mapped[0].first, 0.1f to mapped[1].first,
+            0.9f to mapped[2].first, 0.9f to mapped[3].first
+        ))
+    }
+
+    @Test
+    fun invalidPreviewDimensionsReturnNoMappedCorners() {
+        assertTrue(mapCornersToPreview(corners, 0, 640, 480, 0, 480).isEmpty())
+    }
+
+    @Test
+    fun failedCorrectionKeepsOriginalPhoto() {
+        val original = java.io.File("original.jpg")
+        val corrected = java.io.File("corrected.jpg")
+        assertEquals(original, selectPhotoAfterCorrection(original, corrected, false))
+        assertEquals(corrected, selectPhotoAfterCorrection(original, corrected, true))
+    }
+
     private fun assertCorners(actual: List<Pair<Float, Float>>, expected: List<Pair<Float, Float>>) {
         assertEquals(expected.size, actual.size)
         expected.indices.forEach { index ->
