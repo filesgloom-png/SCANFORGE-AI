@@ -14,7 +14,8 @@ import kotlin.math.hypot
 
 /**
  * On-device document boundary detection and perspective correction.
- * Returns null when no convincing four-corner contour is found.
+ * Returns null when no convincing page-like four-corner contour is found;
+ * callers should then keep the original photo rather than crop an internal region.
  */
 object DocumentImageProcessor {
     fun initialize(): Boolean = OpenCVLoader.initLocal()
@@ -45,11 +46,12 @@ object DocumentImageProcessor {
                 dilationKernel.release()
             }
 
+            // Internal table/grid lines must not outrank the paper boundary.
             Imgproc.findContours(
                 edges,
                 contours,
                 hierarchy,
-                Imgproc.RETR_LIST,
+                Imgproc.RETR_EXTERNAL,
                 Imgproc.CHAIN_APPROX_SIMPLE
             )
 
@@ -60,9 +62,7 @@ object DocumentImageProcessor {
                     val perimeter = Imgproc.arcLength(curve, true)
                     Imgproc.approxPolyDP(curve, approximation, perimeter * 0.02, true)
                     val points = approximation.toArray()
-                    if (points.size == 4) {
-                        quadrilaterals.add(points)
-                    }
+                    if (points.size == 4) quadrilaterals.add(points)
                 } finally {
                     curve.release()
                     approximation.release()
@@ -73,6 +73,7 @@ object DocumentImageProcessor {
                 quadrilaterals,
                 source.width.toDouble() * source.height
             )?.toTypedArray() ?: return null
+
             val width = maxOf(distance(corners[0], corners[1]), distance(corners[3], corners[2])).toInt()
             val height = maxOf(distance(corners[0], corners[3]), distance(corners[1], corners[2])).toInt()
             if (width < 32 || height < 32) return null
@@ -132,11 +133,27 @@ object DocumentImageProcessor {
         val minimumArea = imageArea * 0.12
         val best = candidates.asSequence()
             .filter { it.size == 4 && isConvexQuadrilateral(it) }
+            .filter { hasPlausibleDocumentAspect(it) }
             .map { points -> points to polygonArea(points) }
             .filter { (_, area) -> area > minimumArea }
             .maxByOrNull { it.second }
             ?.first ?: return null
         return orderCorners(best)
+    }
+
+    /**
+     * A very narrow internal table/column is not a safe substitute for a page.
+     * Reject it so the caller preserves the full camera image instead of
+     * silently producing a partial scan. The limits allow portrait and landscape
+     * pages with moderate perspective distortion.
+     */
+    private fun hasPlausibleDocumentAspect(points: Array<Point>): Boolean {
+        if (points.size != 4) return false
+        val width = (distance(points[0], points[1]) + distance(points[2], points[3])) / 2.0
+        val height = (distance(points[1], points[2]) + distance(points[3], points[0])) / 2.0
+        if (width <= 0.0 || height <= 0.0) return false
+        val ratio = width / height
+        return ratio in 0.38..2.65
     }
 
     private fun polygonArea(points: Array<Point>): Double {
