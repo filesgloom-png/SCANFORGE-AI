@@ -164,6 +164,18 @@ class DocumentImageProcessorTest {
     }
 
     @Test
+    fun geometryConfidencePenalizesSeverelySkewedPage() {
+        val skewed = arrayOf(
+            Point(20.0, 20.0),
+            Point(370.0, 35.0),
+            Point(390.0, 380.0),
+            Point(100.0, 300.0)
+        )
+        val confidence = DocumentImageProcessor.scoreQuadrilateralConfidence(skewed, 400.0 * 400.0)
+        assertEquals(true, confidence < 0.75)
+    }
+
+    @Test
     fun geometryConfidenceRejectsLowAreaAndInvalidGeometry() {
         val tiny = rectangle(10.0, 10.0, 100.0, 100.0)
         val concave = arrayOf(

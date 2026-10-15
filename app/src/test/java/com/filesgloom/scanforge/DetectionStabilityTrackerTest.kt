@@ -48,6 +48,33 @@ class DetectionStabilityTrackerTest {
     }
 
     @Test
+    fun jitterWithinMovementToleranceStillAllowsCapture() {
+        val tracker = DetectionStabilityTracker(requiredFrames = 4, maximumCornerMovement = 0.025)
+        assertFalse(tracker.observe(detection()))
+        assertFalse(tracker.observe(detection(xOffset = 0.005)))
+        assertFalse(tracker.observe(detection(xOffset = 0.009)))
+        assertTrue(tracker.observe(detection(xOffset = 0.012)))
+    }
+
+    @Test
+    fun confidenceExactlyAtThresholdCanBecomeStable() {
+        val tracker = DetectionStabilityTracker(requiredFrames = 2, minimumConfidence = 0.75)
+        assertFalse(tracker.observe(detection(confidence = 0.75)))
+        assertTrue(tracker.observe(detection(confidence = 0.75)))
+    }
+
+    @Test
+    fun captureIsIssuedOnlyOnceUntilResetEvenWithStableFrames() {
+        val tracker = DetectionStabilityTracker(requiredFrames = 2)
+        assertFalse(tracker.observe(detection()))
+        assertTrue(tracker.observe(detection()))
+        repeat(10) { assertFalse(tracker.observe(detection())) }
+        tracker.reset()
+        assertFalse(tracker.observe(detection()))
+        assertTrue(tracker.observe(detection()))
+    }
+
+    @Test
     fun resetAllowsASecondCaptureSequence() {
         val tracker = DetectionStabilityTracker(requiredFrames = 2)
         assertFalse(tracker.observe(detection()))

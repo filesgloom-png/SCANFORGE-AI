@@ -244,7 +244,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             } catch (error: Exception) {
-                photo.delete()
+                // Keep the captured original available if decoding or processing fails.
                 status = "Не удалось обработать снимок: ${error.localizedMessage ?: "ошибка чтения"}"
                 return@launch
             }
