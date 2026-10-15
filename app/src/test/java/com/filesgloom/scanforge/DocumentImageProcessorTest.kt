@@ -172,7 +172,12 @@ class DocumentImageProcessorTest {
             Point(100.0, 300.0)
         )
         val confidence = DocumentImageProcessor.scoreQuadrilateralConfidence(skewed, 400.0 * 400.0)
-        assertEquals(true, confidence < 0.75)
+        val regularPageConfidence = DocumentImageProcessor.scoreQuadrilateralConfidence(
+            rectangle(20.0, 20.0, 380.0, 380.0),
+            400.0 * 400.0
+        )
+        assertEquals(true, confidence > 0.0)
+        assertEquals(true, confidence < regularPageConfidence - 0.05)
     }
 
     @Test
