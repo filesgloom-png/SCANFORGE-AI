@@ -30,7 +30,7 @@ object DocumentImageProcessor {
         val contours = mutableListOf<MatOfPoint>()
         val quadrilaterals = mutableListOf<Array<Point>>()
 
-        try {
+        return try {
             Utils.bitmapToMat(source, rgba)
             Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY)
             Imgproc.GaussianBlur(gray, blurred, Size(5.0, 5.0), 0.0)
