@@ -93,6 +93,69 @@ class DocumentImageProcessorTest {
         assertPoint(selected[3], 20.0, 220.0)
     }
 
+
+    @Test
+    fun selectBestQuadrilateralAcceptsPortraitPage() {
+        val portrait = rectangle(40.0, 10.0, 260.0, 390.0)
+
+        val selected = DocumentImageProcessor.selectBestQuadrilateral(
+            listOf(portrait),
+            400.0 * 400.0
+        )
+
+        assertNotNull(selected)
+        assertEquals(4, selected!!.size)
+        assertPoint(selected[0], 40.0, 10.0)
+        assertPoint(selected[1], 260.0, 10.0)
+        assertPoint(selected[2], 260.0, 390.0)
+        assertPoint(selected[3], 40.0, 390.0)
+    }
+
+    @Test
+    fun selectBestQuadrilateralAcceptsLandscapePage() {
+        val landscape = rectangle(10.0, 60.0, 390.0, 280.0)
+
+        val selected = DocumentImageProcessor.selectBestQuadrilateral(
+            listOf(landscape),
+            400.0 * 320.0
+        )
+
+        assertNotNull(selected)
+        assertEquals(4, selected!!.size)
+        assertPoint(selected[0], 10.0, 60.0)
+        assertPoint(selected[1], 390.0, 60.0)
+        assertPoint(selected[2], 390.0, 280.0)
+        assertPoint(selected[3], 10.0, 280.0)
+    }
+
+    @Test
+    fun selectBestQuadrilateralReturnsNullWhenNoVisiblePageBoundaryExists() {
+        // Text lines or an empty image do not provide a trustworthy page contour.
+        assertNull(
+            DocumentImageProcessor.selectBestQuadrilateral(
+                emptyList(),
+                400.0 * 600.0
+            )
+        )
+    }
+
+    @Test
+    fun selectBestQuadrilateralPrefersWholePageOverInternalTable() {
+        val internalTable = rectangle(140.0, 30.0, 260.0, 370.0)
+        val wholePortraitPage = rectangle(40.0, 10.0, 360.0, 390.0)
+
+        val selected = DocumentImageProcessor.selectBestQuadrilateral(
+            listOf(internalTable, wholePortraitPage),
+            400.0 * 400.0
+        )
+
+        assertNotNull(selected)
+        assertPoint(selected!![0], 40.0, 10.0)
+        assertPoint(selected[1], 360.0, 10.0)
+        assertPoint(selected[2], 360.0, 390.0)
+        assertPoint(selected[3], 40.0, 390.0)
+    }
+
     private fun rectangle(left: Double, top: Double, right: Double, bottom: Double) = arrayOf(
         Point(left, top),
         Point(right, top),
