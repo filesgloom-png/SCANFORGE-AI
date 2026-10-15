@@ -17,6 +17,12 @@ import kotlin.math.hypot
  * Returns null when no convincing page-like four-corner contour is found;
  * callers should then keep the original photo rather than crop an internal region.
  */
+data class DocumentDetection(
+    /** Ordered top-left, top-right, bottom-right, bottom-left normalized corners. */
+    val corners: List<Point>,
+    val confidence: Double
+)
+
 object DocumentImageProcessor {
     fun initialize(): Boolean = OpenCVLoader.initLocal()
 
