@@ -16,6 +16,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageProxy
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
 import androidx.camera.core.ImageCapture.OutputFileOptions
@@ -69,6 +70,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -86,6 +88,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 private val Graphite = Color(0xFF101412)
 private val Panel = Color(0xFF1A211D)
@@ -335,12 +339,49 @@ private fun CameraCaptureScreen(
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
     var provider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
     var takingPhoto by remember { mutableStateOf(false) }
+    var liveCorners by remember { mutableStateOf<List<Pair<Float, Float>>?>(null) }
+    var detectionLabel by remember { mutableStateOf("Ищем края листа…") }
+    var autoCaptureEnabled by remember { mutableStateOf(true) }
 
-    DisposableEffect(activity, previewView) {
+    val capturePhoto: (Boolean) -> Unit = { automatic ->
+        val capture = imageCapture
+        if (capture != null && !takingPhoto) {
+            takingPhoto = true
+            detectionLabel = if (automatic) "Лист стабилен • снимаем…" else "Сохраняем снимок…"
+            val directory = File(context.cacheDir, "documents").apply { mkdirs() }
+            val output = File(directory, "scan_${System.currentTimeMillis()}.jpg")
+            val options = OutputFileOptions.Builder(output).build()
+            try {
+                capture.takePicture(options, ContextCompat.getMainExecutor(context),
+                    object : ImageCapture.OnImageSavedCallback {
+                        override fun onImageSaved(result: ImageCapture.OutputFileResults) {
+                            takingPhoto = false
+                            onPhotoCaptured(output)
+                        }
+
+                        override fun onError(exception: ImageCaptureException) {
+                            takingPhoto = false
+                            output.delete()
+                            detectionLabel = "Не удалось снять • попробуй ещё раз"
+                            onCameraError("Не удалось сделать снимок: ${exception.message ?: "ошибка камеры"}")
+                        }
+                    })
+            } catch (error: Exception) {
+                takingPhoto = false
+                output.delete()
+                detectionLabel = "Ошибка съёмки"
+                onCameraError("Не удалось запустить съёмку: ${error.localizedMessage ?: "ошибка камеры"}")
+            }
+        }
+    }
+
+    DisposableEffect(activity, previewView, autoCaptureEnabled) {
         if (activity == null) {
             onCameraError("Не удалось открыть камеру")
             onDispose { }
         } else {
+            val analysisExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+            val tracker = DetectionStabilityTracker(requiredFrames = 5, minimumConfidence = 0.75)
             val future = ProcessCameraProvider.getInstance(context)
             future.addListener({
                 try {
@@ -352,13 +393,59 @@ private fun CameraCaptureScreen(
                     val capture = ImageCapture.Builder()
                         .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
                         .setJpegQuality(96)
+                        .setTargetRotation(previewView.display?.rotation ?: android.view.Surface.ROTATION_0)
                         .build()
+                    val analysis = ImageAnalysis.Builder()
+                        .setTargetResolution(android.util.Size(640, 480))
+                        .setTargetRotation(previewView.display?.rotation ?: android.view.Surface.ROTATION_0)
+                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                        .build()
+                    analysis.setAnalyzer(analysisExecutor) { image ->
+                        var frame: Bitmap? = null
+                        try {
+                            frame = lumaFrameToBitmap(image)
+                            val detection = DocumentImageProcessor.detectDocumentCorners(frame)
+                            val rotation = image.imageInfo.rotationDegrees
+                            val displayCorners = detection?.corners?.map { point ->
+                                when (rotation) {
+                                    90 -> (1.0 - point.y).toFloat() to point.x.toFloat()
+                                    180 -> (1.0 - point.x).toFloat() to (1.0 - point.y).toFloat()
+                                    270 -> point.y.toFloat() to (1.0 - point.x).toFloat()
+                                    else -> point.x.toFloat() to point.y.toFloat()
+                                }
+                            }?.let { orderDisplayCorners(it) }
+
+                            ContextCompat.getMainExecutor(context).execute {
+                                liveCorners = displayCorners
+                                detectionLabel = when {
+                                    detection == null -> "Лист не найден • можно снять вручную"
+                                    detection.confidence < 0.75 -> "Границы неуверенные • держи камеру ровнее"
+                                    else -> "Лист найден • ${(detection.confidence * 100).toInt()}% • не двигай телефон"
+                                }
+                                if (autoCaptureEnabled && !takingPhoto && tracker.observe(detection)) {
+                                    capturePhoto(true)
+                                } else if (!autoCaptureEnabled) {
+                                    tracker.reset()
+                                }
+                            }
+                        } catch (_: Exception) {
+                            ContextCompat.getMainExecutor(context).execute {
+                                liveCorners = null
+                                detectionLabel = "Не удалось распознать края • ручная съёмка доступна"
+                            }
+                            tracker.observe(null)
+                        } finally {
+                            frame?.recycle()
+                            image.close()
+                        }
+                    }
                     cameraProvider.unbindAll()
                     cameraProvider.bindToLifecycle(
                         activity,
                         CameraSelector.DEFAULT_BACK_CAMERA,
                         preview,
-                        capture
+                        capture,
+                        analysis
                     )
                     imageCapture = capture
                 } catch (error: Exception) {
@@ -368,6 +455,7 @@ private fun CameraCaptureScreen(
             onDispose {
                 provider?.unbindAll()
                 imageCapture = null
+                analysisExecutor.shutdown()
             }
         }
     }
@@ -388,66 +476,51 @@ private fun CameraCaptureScreen(
                 modifier = Modifier.weight(1f).fillMaxWidth().background(Color.Black, RoundedCornerShape(24.dp)),
                 contentAlignment = Alignment.Center
             ) {
-                AndroidView(
-                    factory = { previewView },
-                    modifier = Modifier.fillMaxSize()
-                )
-                Box(
-                    modifier = Modifier.fillMaxWidth(0.82f).fillMaxSize(0.78f)
-                        .background(Color.Transparent, RoundedCornerShape(12.dp))
-                ) {
-                    androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
-                        val stroke = 3.dp.toPx()
-                        val length = 30.dp.toPx()
-                        val color = Emerald
-                        val corners = listOf(
-                            androidx.compose.ui.geometry.Offset(0f, 0f) to androidx.compose.ui.geometry.Offset(length, 0f),
-                            androidx.compose.ui.geometry.Offset(0f, 0f) to androidx.compose.ui.geometry.Offset(0f, length),
-                            androidx.compose.ui.geometry.Offset(size.width, 0f) to androidx.compose.ui.geometry.Offset(size.width - length, 0f),
-                            androidx.compose.ui.geometry.Offset(size.width, 0f) to androidx.compose.ui.geometry.Offset(size.width, length),
-                            androidx.compose.ui.geometry.Offset(0f, size.height) to androidx.compose.ui.geometry.Offset(length, size.height),
-                            androidx.compose.ui.geometry.Offset(0f, size.height) to androidx.compose.ui.geometry.Offset(0f, size.height - length),
-                            androidx.compose.ui.geometry.Offset(size.width, size.height) to androidx.compose.ui.geometry.Offset(size.width - length, size.height),
-                            androidx.compose.ui.geometry.Offset(size.width, size.height) to androidx.compose.ui.geometry.Offset(size.width, size.height - length)
+                AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
+                androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
+                    val stroke = 3.dp.toPx()
+                    val corners = liveCorners
+                    if (corners == null) {
+                        val marginX = size.width * 0.09f
+                        val marginY = size.height * 0.10f
+                        val length = 28.dp.toPx()
+                        val frame = listOf(
+                            Offset(marginX, marginY) to Offset(marginX + length, marginY),
+                            Offset(marginX, marginY) to Offset(marginX, marginY + length),
+                            Offset(size.width - marginX, marginY) to Offset(size.width - marginX - length, marginY),
+                            Offset(size.width - marginX, marginY) to Offset(size.width - marginX, marginY + length),
+                            Offset(marginX, size.height - marginY) to Offset(marginX + length, size.height - marginY),
+                            Offset(marginX, size.height - marginY) to Offset(marginX, size.height - marginY - length),
+                            Offset(size.width - marginX, size.height - marginY) to Offset(size.width - marginX - length, size.height - marginY),
+                            Offset(size.width - marginX, size.height - marginY) to Offset(size.width - marginX, size.height - marginY - length)
                         )
-                        corners.forEach { (start, end) ->
-                            drawLine(color, start, end, strokeWidth = stroke)
+                        frame.forEach { (from, to) -> drawLine(Gold, from, to, strokeWidth = stroke) }
+                    } else {
+                        val orientedWidth = previewView.width.toFloat().coerceAtLeast(1f)
+                        val orientedHeight = previewView.height.toFloat().coerceAtLeast(1f)
+                        val points = corners.map { (x, y) -> Offset(x * orientedWidth, y * orientedHeight) }
+                        for (index in points.indices) {
+                            drawLine(Emerald, points[index], points[(index + 1) % points.size], strokeWidth = stroke)
+                            drawCircle(Emerald, radius = 5.dp.toPx(), center = points[index])
                         }
                     }
                 }
             }
+            Text(detectionLabel, color = if (liveCorners == null) Muted else Emerald, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                Text("Автосъёмка при 5 стабильных кадрах", color = Muted, fontSize = 11.sp, modifier = Modifier.weight(1f))
+                androidx.compose.material3.Switch(
+                    checked = autoCaptureEnabled,
+                    onCheckedChange = { autoCaptureEnabled = it },
+                    enabled = !takingPhoto
+                )
+            }
             Text(
-                "Держи телефон параллельно листу и постарайся захватить все четыре угла.",
+                "Если края не распознаны, снимок вручную сохранится без автоматической обрезки.",
                 color = Muted, fontSize = 12.sp
             )
             Button(
-                onClick = {
-                    val capture = imageCapture
-                    if (capture == null || takingPhoto) return@Button
-                    takingPhoto = true
-                    val directory = File(context.cacheDir, "documents").apply { mkdirs() }
-                    val output = File(directory, "scan_${System.currentTimeMillis()}.jpg")
-                    val options = OutputFileOptions.Builder(output).build()
-                    try {
-                        capture.takePicture(options, ContextCompat.getMainExecutor(context),
-                            object : ImageCapture.OnImageSavedCallback {
-                                override fun onImageSaved(result: ImageCapture.OutputFileResults) {
-                                    takingPhoto = false
-                                    onPhotoCaptured(output)
-                                }
-
-                                override fun onError(exception: ImageCaptureException) {
-                                    takingPhoto = false
-                                    output.delete()
-                                    onCameraError("Не удалось сделать снимок: ${exception.message ?: "ошибка камеры"}")
-                                }
-                            })
-                    } catch (error: Exception) {
-                        takingPhoto = false
-                        output.delete()
-                        onCameraError("Не удалось запустить съёмку: ${error.localizedMessage ?: "ошибка камеры"}")
-                    }
-                },
+                onClick = { capturePhoto(false) },
                 enabled = imageCapture != null && !takingPhoto,
                 modifier = Modifier.fillMaxWidth().height(58.dp),
                 shape = RoundedCornerShape(18.dp),
@@ -455,10 +528,38 @@ private fun CameraCaptureScreen(
             ) {
                 Icon(Icons.Default.CameraAlt, contentDescription = null)
                 Spacer(Modifier.width(10.dp))
-                Text(if (takingPhoto) "Сохраняем снимок…" else "Сфотографировать документ", fontWeight = FontWeight.Bold)
+                Text(if (takingPhoto) "Сохраняем снимок…" else "Сфотографировать вручную", fontWeight = FontWeight.Bold)
             }
         }
     }
+}
+
+private fun lumaFrameToBitmap(image: ImageProxy): Bitmap {
+    val plane = image.planes.first()
+    val buffer = plane.buffer.duplicate()
+    val rowStride = plane.rowStride
+    val pixelStride = plane.pixelStride
+    val bytes = ByteArray(buffer.remaining())
+    buffer.get(bytes)
+    val pixels = IntArray(image.width * image.height)
+    for (y in 0 until image.height) {
+        val rowStart = y * rowStride
+        for (x in 0 until image.width) {
+            val index = rowStart + x * pixelStride
+            val luma = (bytes.getOrNull(index)?.toInt()?.and(0xFF) ?: 0)
+            pixels[y * image.width + x] = android.graphics.Color.rgb(luma, luma, luma)
+        }
+    }
+    return Bitmap.createBitmap(pixels, image.width, image.height, Bitmap.Config.ARGB_8888)
+}
+
+private fun orderDisplayCorners(points: List<Pair<Float, Float>>): List<Pair<Float, Float>> {
+    if (points.size != 4) return points
+    val topLeft = points.minBy { it.first + it.second }
+    val bottomRight = points.maxBy { it.first + it.second }
+    val topRight = points.minBy { it.second - it.first }
+    val bottomLeft = points.maxBy { it.second - it.first }
+    return listOf(topLeft, topRight, bottomRight, bottomLeft)
 }
 
 @Composable
