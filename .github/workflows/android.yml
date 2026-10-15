@@ -55,6 +55,30 @@ jobs:
       - name: Run unit tests and build debug APK
         run: gradle --no-daemon testDebugUnitTest assembleDebug --stacktrace
 
+      - name: Report unit test totals
+        run: |
+          python3 - <<'PY'
+          import glob
+          import xml.etree.ElementTree as ET
+
+          reports = glob.glob("app/build/test-results/testDebugUnitTest/TEST-*.xml")
+          if not reports:
+              raise SystemExit("No unit test XML reports were generated.")
+
+          totals = {"tests": 0, "failures": 0, "errors": 0, "skipped": 0}
+          for report in reports:
+              root = ET.parse(report).getroot()
+              for key in totals:
+                  totals[key] += int(root.attrib.get(key, "0"))
+
+          print(
+              "UNIT_TESTS total={tests} failures={failures} "
+              "errors={errors} skipped={skipped}".format(**totals)
+          )
+          if totals["failures"] or totals["errors"] or totals["tests"] == 0:
+              raise SystemExit("Unit test report indicates a failure.")
+          PY
+
       - name: Verify APK integrity and signature
         run: |
           APK="app/build/outputs/apk/debug/app-debug.apk"
