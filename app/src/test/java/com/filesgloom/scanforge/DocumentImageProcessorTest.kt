@@ -58,9 +58,9 @@ class DocumentImageProcessorTest {
         val smaller = rectangle(10.0, 10.0, 150.0, 150.0)
         val larger = arrayOf(
             Point(250.0, 220.0),
+            Point(20.0, 220.0),
             Point(30.0, 20.0),
-            Point(240.0, 20.0),
-            Point(20.0, 220.0)
+            Point(240.0, 20.0)
         )
 
         val selected = DocumentImageProcessor.selectBestQuadrilateral(
