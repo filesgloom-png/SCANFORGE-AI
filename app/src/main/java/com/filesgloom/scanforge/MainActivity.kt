@@ -1,9 +1,9 @@
 package com.filesgloom.scanforge
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.Canvas
-import android.graphics.Color as AndroidColor
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.pdf.PdfDocument
@@ -13,8 +13,14 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.Preview
+import androidx.camera.core.ImageCapture.OutputFileOptions
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,12 +32,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.FolderOpen
@@ -41,7 +47,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Divider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -49,24 +54,33 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
+import androidx.lifecycle.lifecycleScope
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
 
 private val Graphite = Color(0xFF101412)
 private val Panel = Color(0xFF1A211D)
@@ -81,11 +95,19 @@ class MainActivity : ComponentActivity() {
     private var status by mutableStateOf("Готов к сканированию")
     private var query by mutableStateOf("")
     private var documentName by mutableStateOf("Scanforge_Document")
+    private var cameraMode by mutableStateOf(false)
+
+    private val cameraPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) cameraMode = true
+            else status = "Разреши доступ к камере в настройках Android"
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.statusBarColor = android.graphics.Color.rgb(16, 20, 18)
         window.navigationBarColor = android.graphics.Color.rgb(16, 20, 18)
+        DocumentImageProcessor.initialize()
         setContent {
             MaterialTheme(colorScheme = darkColorScheme(
                 primary = Emerald,
@@ -96,25 +118,40 @@ class MainActivity : ComponentActivity() {
                 onBackground = Paper,
                 onSurface = Paper
             )) {
-                ScannerHome(
-                    selectedCount = selectedUris.size,
-                    recognizedCount = recognizedText.size,
-                    status = status,
-                    query = query,
-                    onQueryChange = { query = it },
-                    documentName = documentName,
-                    onNameChange = { documentName = it },
-                    results = recognizedText.filter {
-                        query.isBlank() || it.second.contains(query, ignoreCase = true) || it.first.contains(query, ignoreCase = true)
-                    },
-                    onPickImages = { imagePicker.launch("image/*") },
-                    onExportPdf = { exportPicker.launch(safeFileName(documentName) + ".pdf") },
-                    onClear = {
-                        selectedUris.clear()
-                        recognizedText.clear()
-                        status = "Выбери изображения для нового документа"
-                    }
-                )
+                if (cameraMode) {
+                    CameraCaptureScreen(
+                        onPhotoCaptured = { file ->
+                            cameraMode = false
+                            importCapturedPhoto(file)
+                        },
+                        onCancel = { cameraMode = false },
+                        onCameraError = { message -> status = message }
+                    )
+                } else {
+                    ScannerHome(
+                        selectedCount = selectedUris.size,
+                        recognizedCount = recognizedText.size,
+                        status = status,
+                        query = query,
+                        onQueryChange = { query = it },
+                        onOpenCamera = {
+                            if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
+                                PackageManager.PERMISSION_GRANTED
+                            ) {
+                                cameraMode = true
+                            } else {
+                                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                            }
+                        },
+                        onPickImages = { imagePicker.launch("image/*") },
+                        onExportPdf = { exportPicker.launch(safeFileName(documentName) + ".pdf") },
+                        onClear = {
+                            selectedUris.clear()
+                            recognizedText.clear()
+                            status = "Выбери изображения или сфотографируй документ"
+                        }
+                    )
+                }
             }
         }
     }
@@ -150,6 +187,39 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun importCapturedPhoto(photo: File) {
+        status = "Ищем границы листа и исправляем перспективу…"
+        lifecycleScope.launch {
+            val finalFile = withContext(Dispatchers.Default) {
+                val source = BitmapFactory.decodeFile(photo.absolutePath)
+                    ?: throw IllegalStateException("Не удалось прочитать снимок")
+                try {
+                    val corrected = DocumentImageProcessor.autoCorrect(source)
+                    if (corrected == null) {
+                        photo
+                    } else {
+                        val output = File(photo.parentFile, "corrected_${photo.nameWithoutExtension}.jpg")
+                        FileOutputStream(output).use { stream ->
+                            corrected.compress(Bitmap.CompressFormat.JPEG, 94, stream)
+                        }
+                        corrected.recycle()
+                        output
+                    }
+                } finally {
+                    source.recycle()
+                }
+            }.let { it }
+            val uri = FileProvider.getUriForFile(this@MainActivity, "$packageName.fileprovider", finalFile)
+            if (uri !in selectedUris) selectedUris.add(uri)
+            status = if (finalFile.name.startsWith("corrected_")) {
+                "Лист найден • перспектива исправлена • OCR…"
+            } else {
+                "Снимок сохранён • границы листа не найдены, оставлен оригинал • OCR…"
+            }
+            recognize(uri)
+        }
+    }
+
     private fun recognize(uri: Uri) {
         val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
         try {
@@ -175,7 +245,7 @@ class MainActivity : ComponentActivity() {
         val pdf = PdfDocument()
         try {
             pages.forEachIndexed { index, uri ->
-                val bitmap = contentResolver.openInputStream(uri)?.use(BitmapFactory::decodeStream)
+                val bitmap = contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
                     ?: throw IllegalStateException("Не удалось прочитать страницу ${index + 1}")
                 try {
                     val pageWidth = 595
@@ -183,7 +253,7 @@ class MainActivity : ComponentActivity() {
                     val info = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, index + 1).create()
                     val page = pdf.startPage(info)
                     val canvas = page.canvas
-                    canvas.drawColor(AndroidColor.WHITE)
+                    canvas.drawColor(android.graphics.Color.WHITE)
                     val inset = 24f
                     val scale = minOf((pageWidth - inset * 2) / bitmap.width, (pageHeight - inset * 2) / bitmap.height)
                     val width = bitmap.width * scale
@@ -209,15 +279,149 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
+private fun CameraCaptureScreen(
+    onPhotoCaptured: (File) -> Unit,
+    onCancel: () -> Unit,
+    onCameraError: (String) -> Unit
+) {
+    val context = LocalContext.current
+    val activity = context as? ComponentActivity
+    val previewView = remember {
+        PreviewView(context).apply {
+            scaleType = PreviewView.ScaleType.FILL_CENTER
+            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+        }
+    }
+    var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
+    var provider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
+    var takingPhoto by remember { mutableStateOf(false) }
+
+    DisposableEffect(activity, previewView) {
+        if (activity == null) {
+            onCameraError("Не удалось открыть камеру")
+            onDispose { }
+        } else {
+            val future = ProcessCameraProvider.getInstance(context)
+            future.addListener({
+                try {
+                    val cameraProvider = future.get()
+                    provider = cameraProvider
+                    val preview = Preview.Builder().build().also {
+                        it.surfaceProvider = previewView.surfaceProvider
+                    }
+                    val capture = ImageCapture.Builder()
+                        .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                        .setJpegQuality(96)
+                        .build()
+                    cameraProvider.unbindAll()
+                    cameraProvider.bindToLifecycle(
+                        activity,
+                        CameraSelector.DEFAULT_BACK_CAMERA,
+                        preview,
+                        capture
+                    )
+                    imageCapture = capture
+                } catch (error: Exception) {
+                    onCameraError("Ошибка запуска камеры: ${error.localizedMessage ?: "неизвестная ошибка"}")
+                }
+            }, ContextCompat.getMainExecutor(context))
+            onDispose {
+                provider?.unbindAll()
+                imageCapture = null
+            }
+        }
+    }
+
+    Surface(modifier = Modifier.fillMaxSize(), color = Graphite) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("СКАНИРОВАНИЕ", color = Gold, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+                    Text("Наведи камеру на лист", color = Paper, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                }
+                OutlinedButton(onClick = onCancel) { Text("Назад", color = Gold) }
+            }
+            Box(
+                modifier = Modifier.weight(1f).fillMaxWidth().background(Color.Black, RoundedCornerShape(24.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                AndroidView(
+                    factory = { previewView },
+                    modifier = Modifier.fillMaxSize()
+                )
+                Box(
+                    modifier = Modifier.fillMaxWidth(0.82f).fillMaxSize(0.78f)
+                        .background(Color.Transparent, RoundedCornerShape(12.dp))
+                ) {
+                    androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
+                        val stroke = 3.dp.toPx()
+                        val length = 30.dp.toPx()
+                        val color = Emerald
+                        val corners = listOf(
+                            androidx.compose.ui.geometry.Offset(0f, 0f) to androidx.compose.ui.geometry.Offset(length, 0f),
+                            androidx.compose.ui.geometry.Offset(0f, 0f) to androidx.compose.ui.geometry.Offset(0f, length),
+                            androidx.compose.ui.geometry.Offset(size.width, 0f) to androidx.compose.ui.geometry.Offset(size.width - length, 0f),
+                            androidx.compose.ui.geometry.Offset(size.width, 0f) to androidx.compose.ui.geometry.Offset(size.width, length),
+                            androidx.compose.ui.geometry.Offset(0f, size.height) to androidx.compose.ui.geometry.Offset(length, size.height),
+                            androidx.compose.ui.geometry.Offset(0f, size.height) to androidx.compose.ui.geometry.Offset(0f, size.height - length),
+                            androidx.compose.ui.geometry.Offset(size.width, size.height) to androidx.compose.ui.geometry.Offset(size.width - length, size.height),
+                            androidx.compose.ui.geometry.Offset(size.width, size.height) to androidx.compose.ui.geometry.Offset(size.width, size.height - length)
+                        )
+                        corners.forEach { (start, end) ->
+                            drawLine(color, start, end, strokeWidth = stroke)
+                        }
+                    }
+                }
+            }
+            Text(
+                "Держи телефон параллельно листу и постарайся захватить все четыре угла.",
+                color = Muted, fontSize = 12.sp
+            )
+            Button(
+                onClick = {
+                    val capture = imageCapture
+                    if (capture == null || takingPhoto) return@Button
+                    takingPhoto = true
+                    val directory = File(context.cacheDir, "documents").apply { mkdirs() }
+                    val output = File(directory, "scan_${System.currentTimeMillis()}.jpg")
+                    val options = OutputFileOptions.Builder(output).build()
+                    capture.takePicture(options, ContextCompat.getMainExecutor(context),
+                        object : ImageCapture.OnImageSavedCallback {
+                            override fun onImageSaved(result: ImageCapture.OutputFileResults) {
+                                takingPhoto = false
+                                onPhotoCaptured(output)
+                            }
+
+                            override fun onError(exception: ImageCaptureException) {
+                                takingPhoto = false
+                                onCameraError("Не удалось сделать снимок: ${exception.message ?: "ошибка камеры"}")
+                            }
+                        })
+                },
+                enabled = imageCapture != null && !takingPhoto,
+                modifier = Modifier.fillMaxWidth().height(58.dp),
+                shape = RoundedCornerShape(18.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Emerald, contentColor = Graphite)
+            ) {
+                Icon(Icons.Default.CameraAlt, contentDescription = null)
+                Spacer(Modifier.width(10.dp))
+                Text(if (takingPhoto) "Сохраняем снимок…" else "Сфотографировать документ", fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
 private fun ScannerHome(
     selectedCount: Int,
     recognizedCount: Int,
     status: String,
     query: String,
     onQueryChange: (String) -> Unit,
-    documentName: String,
-    onNameChange: (String) -> Unit,
-    results: List<Pair<String, String>>,
+    onOpenCamera: () -> Unit,
     onPickImages: () -> Unit,
     onExportPdf: () -> Unit,
     onClear: () -> Unit
@@ -261,18 +465,28 @@ private fun ScannerHome(
                         MetricTile("OCR ГОТОВ", recognizedCount.toString(), Modifier.weight(1f))
                     }
                     Button(
-                        onClick = onPickImages,
+                        onClick = onOpenCamera,
                         modifier = Modifier.fillMaxWidth().height(54.dp),
                         shape = RoundedCornerShape(16.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Emerald, contentColor = Graphite)
                     ) {
+                        Icon(Icons.Default.CameraAlt, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Сканировать камерой", fontWeight = FontWeight.Bold)
+                    }
+                    OutlinedButton(
+                        onClick = onPickImages,
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Gold)
+                    ) {
                         Icon(Icons.Default.Add, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
-                        Text("Добавить страницы", fontWeight = FontWeight.Bold)
+                        Text("Добавить изображения")
                     }
                     OutlinedButton(
                         onClick = onExportPdf,
-                        modifier = Modifier.fillMaxWidth().height(52.dp),
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
                         shape = RoundedCornerShape(16.dp),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = Gold)
                     ) {
@@ -285,8 +499,8 @@ private fun ScannerHome(
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("ПОИСК ПО OCR", color = Gold, fontWeight = FontWeight.Bold, fontSize = 11.sp, letterSpacing = 1.4.sp)
-                Spacer(Modifier.weight(1f))
-                Text(status, color = Muted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.width(8.dp))
+                Text(status, color = Muted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             }
             Row(
                 modifier = Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp)).padding(horizontal = 14.dp, vertical = 13.dp),
@@ -311,9 +525,9 @@ private fun ScannerHome(
             }
 
             Text("НАЙДЕННЫЕ ДОКУМЕНТЫ", color = Gold, fontWeight = FontWeight.Bold, fontSize = 11.sp, letterSpacing = 1.4.sp)
-            if (results.isEmpty()) {
+            if (recognizedText.isEmpty()) {
                 Card(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().weight(1f),
                     colors = CardDefaults.cardColors(containerColor = Panel),
                     shape = RoundedCornerShape(18.dp)
                 ) {
@@ -324,12 +538,17 @@ private fun ScannerHome(
                     ) {
                         Icon(Icons.Default.TextSnippet, contentDescription = null, tint = Emerald, modifier = Modifier.size(30.dp))
                         Text(if (selectedCount == 0) "Здесь появятся твои сканы" else "Текст пока распознаётся", color = Paper, fontWeight = FontWeight.SemiBold)
-                        Text("Добавь фото или изображения документов — SCANFORGE обработает их локально.", color = Muted, fontSize = 12.sp)
+                        Text("Сфотографируй документ или добавь изображения — обработка выполняется на устройстве.", color = Muted, fontSize = 12.sp)
                     }
                 }
             } else {
-                Column(modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    results.forEachIndexed { index, item ->
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    recognizedText.filter {
+                        query.isBlank() || it.second.contains(query, ignoreCase = true) || it.first.contains(query, ignoreCase = true)
+                    }.forEachIndexed { index, item ->
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             colors = CardDefaults.cardColors(containerColor = Panel),
@@ -346,7 +565,7 @@ private fun ScannerHome(
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("LOCAL-FIRST • ТВОИ ФАЙЛЫ ОСТАЮТСЯ У ТЕБЯ", color = Muted, fontSize = 9.sp, letterSpacing = 0.7.sp, modifier = Modifier.weight(1f))
-                OutlinedButton(onClick = onClear, contentPadding = ButtonDefaults.TextButtonContentPadding) {
+                OutlinedButton(onClick = onClear) {
                     Text("Очистить", color = Muted, fontSize = 11.sp)
                 }
             }
