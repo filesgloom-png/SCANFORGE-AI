@@ -191,28 +191,43 @@ class MainActivity : ComponentActivity() {
     private fun importCapturedPhoto(photo: File) {
         status = "Ищем границы листа и исправляем перспективу…"
         lifecycleScope.launch {
-            val finalFile = withContext(Dispatchers.Default) {
-                val source = BitmapFactory.decodeFile(photo.absolutePath)
-                    ?: throw IllegalStateException("Не удалось прочитать снимок")
-                try {
-                    val corrected = DocumentImageProcessor.autoCorrect(source)
-                    if (corrected == null) {
-                        photo
-                    } else {
-                        val output = File(photo.parentFile, "corrected_${photo.nameWithoutExtension}.jpg")
-                        FileOutputStream(output).use { stream ->
-                            corrected.compress(Bitmap.CompressFormat.JPEG, 94, stream)
+            val finalFile = try {
+                withContext(Dispatchers.Default) {
+                    val source = BitmapFactory.decodeFile(photo.absolutePath)
+                        ?: throw IllegalStateException("Не удалось прочитать снимок")
+                    try {
+                        val corrected = DocumentImageProcessor.autoCorrect(source)
+                        if (corrected == null) {
+                            photo
+                        } else {
+                            val output = File(photo.parentFile, "corrected_${photo.nameWithoutExtension}.jpg")
+                            try {
+                                FileOutputStream(output).use { stream ->
+                                    if (!corrected.compress(Bitmap.CompressFormat.JPEG, 94, stream)) {
+                                        throw java.io.IOException("Не удалось сохранить исправленный снимок")
+                                    }
+                                }
+                                output
+                            } catch (error: Exception) {
+                                output.delete()
+                                photo
+                            } finally {
+                                corrected.recycle()
+                            }
                         }
-                        corrected.recycle()
-                        output
+                    } finally {
+                        source.recycle()
                     }
-                } finally {
-                    source.recycle()
                 }
-            }.let { it }
+            } catch (error: Exception) {
+                photo.delete()
+                status = "Не удалось обработать снимок: ${error.localizedMessage ?: "ошибка чтения"}"
+                return@launch
+            }
             val uri = FileProvider.getUriForFile(this@MainActivity, "$packageName.fileprovider", finalFile)
             if (uri !in selectedUris) selectedUris.add(uri)
             status = if (finalFile.name.startsWith("corrected_")) {
+                photo.delete()
                 "Лист найден • перспектива исправлена • OCR…"
             } else {
                 "Снимок сохранён • границы листа не найдены, оставлен оригинал • OCR…"
