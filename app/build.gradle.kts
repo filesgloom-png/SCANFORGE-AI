@@ -15,6 +15,11 @@ android {
         versionCode = 2
         versionName = "0.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // This app targets ARM64 Android devices; avoid bundling unused OpenCV ABIs.
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     buildTypes {
