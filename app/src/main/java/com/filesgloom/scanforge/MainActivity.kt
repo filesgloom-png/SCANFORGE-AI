@@ -404,18 +404,25 @@ private fun CameraCaptureScreen(
                     val directory = File(context.cacheDir, "documents").apply { mkdirs() }
                     val output = File(directory, "scan_${System.currentTimeMillis()}.jpg")
                     val options = OutputFileOptions.Builder(output).build()
-                    capture.takePicture(options, ContextCompat.getMainExecutor(context),
-                        object : ImageCapture.OnImageSavedCallback {
-                            override fun onImageSaved(result: ImageCapture.OutputFileResults) {
-                                takingPhoto = false
-                                onPhotoCaptured(output)
-                            }
+                    try {
+                        capture.takePicture(options, ContextCompat.getMainExecutor(context),
+                            object : ImageCapture.OnImageSavedCallback {
+                                override fun onImageSaved(result: ImageCapture.OutputFileResults) {
+                                    takingPhoto = false
+                                    onPhotoCaptured(output)
+                                }
 
-                            override fun onError(exception: ImageCaptureException) {
-                                takingPhoto = false
-                                onCameraError("Не удалось сделать снимок: ${exception.message ?: "ошибка камеры"}")
-                            }
-                        })
+                                override fun onError(exception: ImageCaptureException) {
+                                    takingPhoto = false
+                                    output.delete()
+                                    onCameraError("Не удалось сделать снимок: ${exception.message ?: "ошибка камеры"}")
+                                }
+                            })
+                    } catch (error: Exception) {
+                        takingPhoto = false
+                        output.delete()
+                        onCameraError("Не удалось запустить съёмку: ${error.localizedMessage ?: "ошибка камеры"}")
+                    }
                 },
                 enabled = imageCapture != null && !takingPhoto,
                 modifier = Modifier.fillMaxWidth().height(58.dp),
