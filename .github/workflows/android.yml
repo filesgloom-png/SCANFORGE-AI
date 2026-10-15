@@ -55,6 +55,34 @@ jobs:
       - name: Run unit tests and build debug APK
         run: gradle --no-daemon testDebugUnitTest assembleDebug --stacktrace
 
+      - name: Report APK size breakdown
+        run: |
+          python3 - <<'PY'
+          import os
+          import zipfile
+          from collections import defaultdict
+
+          apk = "app/build/outputs/apk/debug/app-debug.apk"
+          if not os.path.isfile(apk):
+              raise SystemExit("APK missing before size analysis.")
+
+          with zipfile.ZipFile(apk) as archive:
+              entries = [item for item in archive.infolist() if not item.is_dir()]
+          abi_sizes = defaultdict(int)
+          for item in entries:
+              parts = item.filename.split("/")
+              if len(parts) >= 3 and parts[0] == "lib":
+                  abi_sizes[parts[1]] += item.file_size
+
+          print("APK_UNCOMPRESSED_BYTES={}".format(sum(item.file_size for item in entries)))
+          for abi, size in sorted(abi_sizes.items(), key=lambda pair: pair[1], reverse=True):
+              print("APK_ABI_BYTES {}={}".format(abi, size))
+          print("APK_LARGEST_ENTRIES_BEGIN")
+          for item in sorted(entries, key=lambda entry: entry.file_size, reverse=True)[:25]:
+              print("{} {}".format(item.file_size, item.filename))
+          print("APK_LARGEST_ENTRIES_END")
+          PY
+
       - name: Report unit test totals
         run: |
           python3 - <<'PY'
