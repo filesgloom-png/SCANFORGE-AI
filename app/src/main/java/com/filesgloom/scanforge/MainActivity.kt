@@ -406,14 +406,9 @@ private fun CameraCaptureScreen(
                             frame = lumaFrameToBitmap(image)
                             val detection = DocumentImageProcessor.detectDocumentCorners(frame)
                             val rotation = image.imageInfo.rotationDegrees
-                            val displayCorners = detection?.corners?.map { point ->
-                                when (rotation) {
-                                    90 -> (1.0 - point.y).toFloat() to point.x.toFloat()
-                                    180 -> (1.0 - point.x).toFloat() to (1.0 - point.y).toFloat()
-                                    270 -> point.y.toFloat() to (1.0 - point.x).toFloat()
-                                    else -> point.x.toFloat() to point.y.toFloat()
-                                }
-                            }?.let { orderDisplayCorners(it) }
+                            val displayCorners = detection?.corners
+                                ?.map { it.x.toFloat() to it.y.toFloat() }
+                                ?.let { transformDisplayCorners(it, rotation) }
 
                             ContextCompat.getMainExecutor(context).execute {
                                 liveCorners = displayCorners
@@ -553,8 +548,24 @@ private fun lumaFrameToBitmap(image: ImageProxy): Bitmap {
     return Bitmap.createBitmap(pixels, image.width, image.height, Bitmap.Config.ARGB_8888)
 }
 
-private fun orderDisplayCorners(points: List<Pair<Float, Float>>): List<Pair<Float, Float>> {
-    if (points.size != 4) return points
+internal fun transformDisplayCorners(
+    points: List<Pair<Float, Float>>,
+    rotationDegrees: Int
+): List<Pair<Float, Float>> {
+    if (points.size != 4) return emptyList()
+    val rotated = points.map { (x, y) ->
+        when (rotationDegrees) {
+            90 -> (1f - y) to x
+            180 -> (1f - x) to (1f - y)
+            270 -> y to (1f - x)
+            else -> x to y
+        }
+    }
+    return orderDisplayCorners(rotated)
+}
+
+internal fun orderDisplayCorners(points: List<Pair<Float, Float>>): List<Pair<Float, Float>> {
+    if (points.size != 4) return emptyList()
     val topLeft = points.minBy { it.first + it.second }
     val bottomRight = points.maxBy { it.first + it.second }
     val topRight = points.minBy { it.second - it.first }
