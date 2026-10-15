@@ -264,14 +264,19 @@ class MainActivity : ComponentActivity() {
                 val bitmap = contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
                     ?: throw IllegalStateException("Не удалось прочитать страницу ${index + 1}")
                 try {
-                    val pageWidth = 595
-                    val pageHeight = 842
+                    // Keep every selected image as its own PDF page and match page orientation
+                    // to the source image so landscape scans are not needlessly shrunk.
+                    val landscape = bitmap.width > bitmap.height
+                    val pageWidth = if (landscape) 842 else 595
+                    val pageHeight = if (landscape) 595 else 842
                     val info = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, index + 1).create()
                     val page = pdf.startPage(info)
                     val canvas = page.canvas
                     canvas.drawColor(android.graphics.Color.WHITE)
                     val inset = 24f
-                    val scale = minOf((pageWidth - inset * 2) / bitmap.width, (pageHeight - inset * 2) / bitmap.height)
+                    val availableWidth = pageWidth - inset * 2f
+                    val availableHeight = pageHeight - inset * 2f
+                    val scale = minOf(availableWidth / bitmap.width.toFloat(), availableHeight / bitmap.height.toFloat())
                     val width = bitmap.width * scale
                     val height = bitmap.height * scale
                     val left = (pageWidth - width) / 2f
@@ -516,7 +521,7 @@ private fun ScannerHome(
                     ) {
                         Icon(Icons.Default.FolderOpen, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
-                        Text("Экспортировать в PDF", fontWeight = FontWeight.SemiBold)
+                        Text("Собрать PDF • ${selectedCount} стр.", fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
