@@ -28,8 +28,7 @@ object DocumentImageProcessor {
         val edges = Mat()
         val hierarchy = Mat()
         val contours = mutableListOf<MatOfPoint>()
-        var best: MatOfPoint2f? = null
-        var bestArea = source.width.toDouble() * source.height * 0.12
+        val quadrilaterals = mutableListOf<Array<Point>>()
 
         try {
             Utils.bitmapToMat(source, rgba)
@@ -52,18 +51,17 @@ object DocumentImageProcessor {
                 val approximation = MatOfPoint2f()
                 Imgproc.approxPolyDP(curve, approximation, perimeter * 0.02, true)
                 val points = approximation.toArray()
-                val area = kotlin.math.abs(Imgproc.contourArea(contour))
-
-                if (points.size == 4 && area > bestArea && Imgproc.isContourConvex(MatOfPoint(*points))) {
-                    best?.release()
-                    best = MatOfPoint2f(*orderCorners(points).toTypedArray())
-                    bestArea = area
+                if (points.size == 4) {
+                    quadrilaterals.add(points)
                 }
                 curve.release()
                 approximation.release()
             }
 
-            val corners = best?.toArray() ?: return null
+            val corners = selectBestQuadrilateral(
+                quadrilaterals,
+                source.width.toDouble() * source.height
+            )?.toTypedArray() ?: return null
             val width = maxOf(distance(corners[0], corners[1]), distance(corners[3], corners[2])).toInt()
             val height = maxOf(distance(corners[0], corners[3]), distance(corners[1], corners[2])).toInt()
             if (width < 32 || height < 32) return null
@@ -96,7 +94,6 @@ object DocumentImageProcessor {
                 corrected.release()
             }
         } finally {
-            best?.release()
             contours.forEach { it.release() }
             rgba.release()
             gray.release()
@@ -104,6 +101,47 @@ object DocumentImageProcessor {
             edges.release()
             hierarchy.release()
         }
+    }
+
+    internal fun selectBestQuadrilateral(
+        candidates: List<Array<Point>>,
+        imageArea: Double
+    ): List<Point>? {
+        if (imageArea <= 0.0) return null
+        val minimumArea = imageArea * 0.12
+        val best = candidates.asSequence()
+            .filter { it.size == 4 && isConvexQuadrilateral(it) }
+            .map { points -> points to polygonArea(points) }
+            .filter { (_, area) -> area > minimumArea }
+            .maxByOrNull { it.second }
+            ?.first ?: return null
+        return orderCorners(best)
+    }
+
+    private fun polygonArea(points: Array<Point>): Double {
+        var twiceArea = 0.0
+        for (index in points.indices) {
+            val current = points[index]
+            val next = points[(index + 1) % points.size]
+            twiceArea += current.x * next.y - next.x * current.y
+        }
+        return kotlin.math.abs(twiceArea) / 2.0
+    }
+
+    private fun isConvexQuadrilateral(points: Array<Point>): Boolean {
+        if (points.size != 4) return false
+        var direction = 0
+        for (index in points.indices) {
+            val a = points[index]
+            val b = points[(index + 1) % points.size]
+            val c = points[(index + 2) % points.size]
+            val cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x)
+            if (kotlin.math.abs(cross) < 1e-6) return false
+            val currentDirection = if (cross > 0.0) 1 else -1
+            if (direction != 0 && currentDirection != direction) return false
+            direction = currentDirection
+        }
+        return true
     }
 
     internal fun orderCorners(points: Array<Point>): List<Point> {
