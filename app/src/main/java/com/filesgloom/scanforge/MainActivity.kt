@@ -131,6 +131,7 @@ class MainActivity : ComponentActivity() {
                     ScannerHome(
                         selectedCount = selectedUris.size,
                         recognizedCount = recognizedText.size,
+                        recognizedText = recognizedText.toList(),
                         status = status,
                         query = query,
                         onQueryChange = { query = it },
@@ -418,6 +419,7 @@ private fun CameraCaptureScreen(
 private fun ScannerHome(
     selectedCount: Int,
     recognizedCount: Int,
+    recognizedText: List<Pair<String, String>>,
     status: String,
     query: String,
     onQueryChange: (String) -> Unit,
