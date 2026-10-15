@@ -61,9 +61,11 @@ jobs:
           test -s "$APK"
           unzip -t "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
-          echo "APK_SIZE_BYTES=$(stat -c%s "$APK")" >> "$GITHUB_STEP_SUMMARY"
-          echo "APK_SHA256=$(sha256sum "$APK" | cut -d' ' -f1)" >> "$GITHUB_STEP_SUMMARY"
-          echo "APK verification passed." >> "$GITHUB_STEP_SUMMARY"
+          APK_SIZE_BYTES=$(stat -c%s "$APK")
+          APK_SHA256=$(sha256sum "$APK" | cut -d' ' -f1)
+          echo "APK_SIZE_BYTES=$APK_SIZE_BYTES" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "APK_SHA256=$APK_SHA256" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "APK verification passed." | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
